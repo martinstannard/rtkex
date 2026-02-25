@@ -1,6 +1,6 @@
 [package]
 name = "rtk"
-version = "0.18.0"
+version = "0.22.2"
 edition = "2021"
 authors = ["Patrick Szymkowiak"]
 description = "Rust Token Killer - High-performance CLI proxy to minimize LLM token consumption"
@@ -23,7 +23,6 @@ serde_json = { version = "1", features = ["preserve_order"] }
 colored = "2"
 dirs = "5"
 rusqlite = { version = "0.31", features = ["bundled"] }
-sha2 = "0.10"
 toml = "0.8"
 chrono = "0.4"
 thiserror = "1.0"
