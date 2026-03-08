@@ -9,11 +9,11 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use std::process::Command;
 
-/// Tronque une chaîne à `max_len` caractères avec "..." si nécessaire.
+/// Truncates a string to `max_len` characters, appending "..." if needed.
 ///
 /// # Arguments
-/// * `s` - La chaîne à tronquer
-/// * `max_len` - Longueur maximale avant troncature (minimum 3 pour inclure "...")
+/// * `s` - The string to truncate
+/// * `max_len` - Maximum length before truncation (minimum 3 to include "...")
 ///
 /// # Examples
 /// ```
@@ -33,10 +33,10 @@ pub fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Supprime les codes ANSI d'une chaîne (couleurs, styles).
+/// Strips ANSI escape codes (colors, styles) from a string.
 ///
 /// # Arguments
-/// * `text` - Texte contenant potentiellement des codes ANSI
+/// * `text` - Text potentially containing ANSI codes
 ///
 /// # Examples
 /// ```
@@ -51,11 +51,11 @@ pub fn strip_ansi(text: &str) -> String {
     ANSI_RE.replace_all(text, "").to_string()
 }
 
-/// Exécute une commande et retourne stdout/stderr nettoyés.
+/// Execute a command and return cleaned stdout/stderr.
 ///
 /// # Arguments
-/// * `cmd` - Commande à exécuter (ex: "eslint")
-/// * `args` - Arguments de la commande
+/// * `cmd` - Command to execute (e.g. "eslint")
+/// * `args` - Command arguments
 ///
 /// # Returns
 /// `(stdout: String, stderr: String, exit_code: i32)`
@@ -80,13 +80,13 @@ pub fn execute_command(cmd: &str, args: &[&str]) -> Result<(String, String, i32)
     Ok((stdout, stderr, exit_code))
 }
 
-/// Formate un nombre de tokens avec suffixes K/M pour lisibilité.
+/// Format a token count with K/M suffixes for readability.
 ///
 /// # Arguments
-/// * `n` - Nombre de tokens
+/// * `n` - Token count
 ///
 /// # Returns
-/// String formaté (ex: "1.2M", "59.2K", "694")
+/// Formatted string (e.g. "1.2M", "59.2K", "694")
 ///
 /// # Examples
 /// ```
@@ -105,13 +105,13 @@ pub fn format_tokens(n: usize) -> String {
     }
 }
 
-/// Formate un montant USD avec précision adaptée.
+/// Format a USD amount with adaptive precision.
 ///
 /// # Arguments
-/// * `amount` - Montant en dollars
+/// * `amount` - Amount in dollars
 ///
 /// # Returns
-/// String formaté avec $ prefix
+/// Formatted string with $ prefix
 ///
 /// # Examples
 /// ```
@@ -153,6 +153,40 @@ pub fn format_cpt(cpt: f64) -> String {
     }
     let cpt_per_million = cpt * 1_000_000.0;
     format!("${:.2}/MTok", cpt_per_million)
+}
+
+/// Join items into a newline-separated string, appending an overflow hint when total > max.
+///
+/// # Examples
+/// ```
+/// use rtk::utils::join_with_overflow;
+/// let items = vec!["a".to_string(), "b".to_string()];
+/// assert_eq!(join_with_overflow(&items, 5, 3, "items"), "a\nb\n... +2 more items");
+/// assert_eq!(join_with_overflow(&items, 2, 3, "items"), "a\nb");
+/// ```
+pub fn join_with_overflow(items: &[String], total: usize, max: usize, label: &str) -> String {
+    let mut out = items.join("\n");
+    if total > max {
+        out.push_str(&format!("\n... +{} more {}", total - max, label));
+    }
+    out
+}
+
+/// Truncate an ISO 8601 datetime string to just the date portion (first 10 chars).
+///
+/// # Examples
+/// ```
+/// use rtk::utils::truncate_iso_date;
+/// assert_eq!(truncate_iso_date("2024-01-15T10:30:00Z"), "2024-01-15");
+/// assert_eq!(truncate_iso_date("2024-01-15"), "2024-01-15");
+/// assert_eq!(truncate_iso_date("short"), "short");
+/// ```
+pub fn truncate_iso_date(date: &str) -> &str {
+    if date.len() >= 10 {
+        &date[..10]
+    } else {
+        date
+    }
 }
 
 /// Format a confirmation message: "ok \<action\> \<detail\>"
