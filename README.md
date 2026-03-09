@@ -183,6 +183,16 @@ rtk ruff check                  # Python linting (JSON, -80%)
 rtk golangci-lint run           # Go linting (JSON, -85%)
 ```
 
+### Elixir / Mix
+```bash
+rtk mix test                    # Failures only, seed + timing (-90%)
+rtk mix compile                 # Warnings/errors only (-85%)
+rtk mix credo                   # Priority-filtered issues (-80%)
+rtk mix phx.routes              # Compact route table, truncated at 100 (-70%)
+rtk mix ash.codegen             # Migration SQL only, no JSON snapshots (-88%)
+rtk mix ash_postgres.generate_migrations  # Same as ash.codegen (-88%)
+```
+
 ### Package Managers
 ```bash
 rtk pnpm list                   # Compact dependency tree
@@ -304,6 +314,7 @@ After install, **restart Claude Code**.
 | `kubectl get/logs` | `rtk kubectl ...` |
 | `curl` | `rtk curl` |
 | `pnpm list/outdated` | `rtk pnpm ...` |
+| `mix test/compile/credo/phx.routes` | `rtk mix ...` |
 
 Commands already using `rtk`, heredocs (`<<`), and unrecognized commands pass through unchanged.
 

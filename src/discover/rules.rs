@@ -44,6 +44,8 @@ pub const PATTERNS: &[&str] = &[
     // Go tooling
     r"^go\s+(test|build|vet)",
     r"^golangci-lint(\s|$)",
+    // Elixir tooling
+    r"^mix\s+(test|compile|credo|phx\.routes|ash\.codegen|ash_postgres\.generate_migrations)",
     // AWS CLI
     r"^aws\s+",
     // PostgreSQL
@@ -297,6 +299,22 @@ pub const RULES: &[RtkRule] = &[
         category: "Go",
         savings_pct: 85.0,
         subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // Elixir tooling
+    RtkRule {
+        rtk_cmd: "rtk mix",
+        rewrite_prefixes: &["mix"],
+        category: "Elixir",
+        savings_pct: 85.0,
+        subcmd_savings: &[
+            ("test", 90.0),
+            ("compile", 85.0),
+            ("credo", 80.0),
+            ("phx.routes", 70.0),
+            ("ash.codegen", 88.0),
+            ("ash_postgres.generate_migrations", 88.0),
+        ],
         subcmd_status: &[],
     },
     // AWS CLI
