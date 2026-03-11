@@ -15,10 +15,15 @@ fn detect_formatter(args: &[String]) -> String {
 
 /// Detect formatter with explicit directory (for testing)
 fn detect_formatter_in_dir(args: &[String], dir: &Path) -> String {
-    // Check if first arg is a known formatter
+    // Check if first arg is a formatter/tool name (not a flag or path)
     if !args.is_empty() {
         let first_arg = &args[0];
+        // Known formatters with optimized filtering
         if matches!(first_arg.as_str(), "prettier" | "black" | "ruff" | "biome") {
+            return first_arg.clone();
+        }
+        // Unknown tool name (not a flag, not a file path) → passthrough
+        if !first_arg.starts_with('-') && !first_arg.contains('/') && !first_arg.contains('.') {
             return first_arg.clone();
         }
     }
@@ -53,11 +58,15 @@ fn detect_formatter_in_dir(args: &[String], dir: &Path) -> String {
     "ruff".to_string()
 }
 
+/// Known formatters with optimized filtering
+const KNOWN_FORMATTERS: &[&str] = &["prettier", "black", "ruff", "biome"];
+
 pub fn run(args: &[String], verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
     // Detect formatter
     let formatter = detect_formatter(args);
+    let is_known = KNOWN_FORMATTERS.contains(&formatter.as_str());
 
     // Determine start index for actual arguments
     let start_idx = if !args.is_empty() && args[0] == formatter {
@@ -71,12 +80,56 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
         eprintln!("Arguments: {}", args[start_idx..].join(" "));
     }
 
-    // Build command based on formatter
+    // Unknown formatters: passthrough (execute directly, no flag injection or filtering)
+    if !is_known {
+        let user_args = &args[start_idx..];
+
+        if verbose > 0 {
+            eprintln!(
+                "Unknown formatter '{}', executing as passthrough",
+                formatter
+            );
+        }
+
+        let mut cmd = std::process::Command::new(&formatter);
+        cmd.args(user_args);
+
+        let output = cmd
+            .output()
+            .context(format!("Failed to run '{}'. Is it installed?", formatter))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Print stdout and stderr directly (no filtering)
+        if !stdout.is_empty() {
+            print!("{}", stdout);
+        }
+        if !stderr.is_empty() {
+            eprint!("{}", stderr);
+        }
+
+        let raw = format!("{}\n{}", stdout, stderr);
+        timer.track(
+            &format!("{} {}", formatter, user_args.join(" ")),
+            &format!("rtk format {} {}", formatter, user_args.join(" ")),
+            &raw,
+            &raw,
+        );
+
+        if !output.status.success() {
+            return Ok(output.status.code().unwrap_or(1));
+        }
+
+        return Ok(0);
+    }
+
+    // Build command based on known formatter
     let mut cmd = match formatter.as_str() {
         "prettier" => package_manager_exec("prettier"),
         "black" | "ruff" => resolved_command(formatter.as_str()),
         "biome" => package_manager_exec("biome"),
-        _ => resolved_command(formatter.as_str()),
+        _ => unreachable!("all known formatters handled above"),
     };
 
     // Add formatter-specific flags
@@ -124,7 +177,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
         "prettier" => prettier_cmd::filter_prettier_output(&raw),
         "ruff" => ruff_cmd::filter_ruff_format(&raw),
         "black" => filter_black_output(&raw),
-        _ => raw.trim().to_string(),
+        _ => unreachable!("all known formatters handled above"),
     };
 
     println!("{}", filtered);
@@ -360,6 +413,38 @@ Oh no! 💥 💔 💥
         assert!(result.contains("test_utils.py"));
         assert!(result.contains("3 files already formatted"));
         assert!(result.contains("Run `black .`"));
+    }
+
+    #[test]
+    fn test_detect_formatter_unknown_tool_passthrough() {
+        // Unknown tool names like "mix" should be returned as-is (passthrough)
+        let args = vec![
+            "mix".to_string(),
+            "format".to_string(),
+            "--check-formatted".to_string(),
+        ];
+        let formatter = detect_formatter(&args);
+        assert_eq!(formatter, "mix");
+    }
+
+    #[test]
+    fn test_detect_formatter_unknown_tool_gofmt() {
+        let args = vec!["gofmt".to_string(), "-l".to_string(), ".".to_string()];
+        let formatter = detect_formatter(&args);
+        assert_eq!(formatter, "gofmt");
+    }
+
+    #[test]
+    fn test_detect_formatter_flags_only_still_autodetects() {
+        // If the first arg is a flag (not a tool name), auto-detect should kick in
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+        let mut file = fs::File::create(&pyproject_path).unwrap();
+        writeln!(file, "[tool.black]\nline-length = 88").unwrap();
+
+        let args = vec!["--check".to_string()];
+        let formatter = detect_formatter_in_dir(&args, temp_dir.path());
+        assert_eq!(formatter, "black");
     }
 
     #[test]
