@@ -458,91 +458,134 @@ fn view_pr(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
     Ok(())
 }
 
-fn pr_checks(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> {
-    let timer = tracking::TimedExecution::start();
-
-    let (pr_number, extra_args) = match extract_identifier_and_extra_args(args) {
-        Some(result) => result,
-        None => return Err(anyhow::anyhow!("PR number required")),
-    };
-
-    let mut cmd = Command::new("gh");
-    cmd.args(["pr", "checks", &pr_number]);
-    for arg in &extra_args {
-        cmd.arg(arg);
-    }
-
-    let output = cmd.output().context("Failed to run gh pr checks")?;
-    let raw = String::from_utf8_lossy(&output.stdout).to_string();
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        timer.track(
-            &format!("gh pr checks {}", pr_number),
-            &format!("rtk gh pr checks {}", pr_number),
-            &stderr,
-            &stderr,
-        );
-        eprintln!("{}", stderr.trim());
-        std::process::exit(output.status.code().unwrap_or(1));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse and compress checks output
+/// Parse and compress `gh pr checks` output into a summary.
+///
+/// Works with both TTY format (Unicode ✓/✗ symbols) and non-TTY piped format
+/// (tab-separated with pass/fail/pending status words).
+fn filter_pr_checks(stdout: &str) -> String {
     let mut passed = 0;
     let mut failed = 0;
     let mut pending = 0;
     let mut failed_checks = Vec::new();
 
     for line in stdout.lines() {
-        if line.contains('✓') || line.contains("pass") {
+        let line_trimmed = line.trim();
+        if line_trimmed.is_empty() {
+            continue;
+        }
+
+        // Non-TTY tab-separated format: NAME\tSTATUS\tDURATION\tURL
+        // Check tab-separated status field first for precise matching
+        let parts: Vec<&str> = line_trimmed.split('\t').collect();
+        if parts.len() >= 2 {
+            // In non-TTY format, status is the second field
+            // In TTY format, the first field might be a symbol
+            let status = parts[1].trim().to_lowercase();
+            if status == "pass" {
+                passed += 1;
+                continue;
+            } else if status == "fail" {
+                failed += 1;
+                // Extract check name (first field in non-TTY format)
+                failed_checks.push(parts[0].trim().to_string());
+                continue;
+            } else if status == "pending" || status == "skipping" {
+                pending += 1;
+                continue;
+            }
+        }
+
+        // TTY format fallback: uses Unicode symbols ✓ ✗ *
+        if line.contains('\u{2713}') {
             passed += 1;
-        } else if line.contains('✗') || line.contains("fail") {
+        } else if line.contains('\u{2717}') {
             failed += 1;
-            failed_checks.push(line.trim().to_string());
-        } else if line.contains('*') || line.contains("pending") {
+            failed_checks.push(line_trimmed.to_string());
+        } else if line.contains('*') {
             pending += 1;
         }
     }
 
     let mut filtered = String::new();
-
-    let line = "🔍 CI Checks Summary:\n";
-    filtered.push_str(line);
-    print!("{}", line);
-
-    let line = format!("  ✅ Passed: {}\n", passed);
-    filtered.push_str(&line);
-    print!("{}", line);
-
-    let line = format!("  ❌ Failed: {}\n", failed);
-    filtered.push_str(&line);
-    print!("{}", line);
+    filtered.push_str("CI Checks Summary:\n");
+    filtered.push_str(&format!("  Passed: {}\n", passed));
+    filtered.push_str(&format!("  Failed: {}\n", failed));
 
     if pending > 0 {
-        let line = format!("  ⏳ Pending: {}\n", pending);
-        filtered.push_str(&line);
-        print!("{}", line);
+        filtered.push_str(&format!("  Pending: {}\n", pending));
     }
 
     if !failed_checks.is_empty() {
-        let line = "\n  Failed checks:\n";
-        filtered.push_str(line);
-        print!("{}", line);
-        for check in failed_checks {
-            let line = format!("    {}\n", check);
-            filtered.push_str(&line);
-            print!("{}", line);
+        filtered.push_str("\n  Failed checks:\n");
+        for check in &failed_checks {
+            filtered.push_str(&format!("    {}\n", check));
         }
     }
 
+    filtered
+}
+
+fn pr_checks(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+
+    // PR number is optional -- gh can auto-detect from current branch
+    let (identifier, extra_args) = match extract_identifier_and_extra_args(args) {
+        Some(result) => (Some(result.0), result.1),
+        None => {
+            // Collect any flags that were passed without an identifier
+            let flags: Vec<String> = args.to_vec();
+            (None, flags)
+        }
+    };
+
+    let mut cmd = Command::new("gh");
+    cmd.args(["pr", "checks"]);
+    if let Some(ref id) = identifier {
+        cmd.arg(id);
+    }
+    for arg in &extra_args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd.output().context("Failed to run gh pr checks")?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(1);
+
+    let id_str = identifier.as_deref().unwrap_or("(current)");
+
+    // gh pr checks uses non-zero exit codes for check status:
+    //   0 = all checks passed
+    //   1 = some checks failed
+    //   8 = checks pending
+    // Only treat as a real error if stderr has content and stdout is empty
+    // (indicating an actual error like "no PR found" or "not a git repo")
+    if !output.status.success() && !stderr.trim().is_empty() && stdout.trim().is_empty() {
+        timer.track(
+            &format!("gh pr checks {}", id_str),
+            &format!("rtk gh pr checks {}", id_str),
+            &stderr,
+            &stderr,
+        );
+        eprintln!("{}", stderr.trim());
+        std::process::exit(exit_code);
+    }
+
+    let filtered = filter_pr_checks(&stdout);
+    print!("{}", filtered);
+
     timer.track(
-        &format!("gh pr checks {}", pr_number),
-        &format!("rtk gh pr checks {}", pr_number),
-        &raw,
+        &format!("gh pr checks {}", id_str),
+        &format!("rtk gh pr checks {}", id_str),
+        &stdout,
         &filtered,
     );
+
+    // Preserve the original exit code so callers can detect check status
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+
     Ok(())
 }
 
@@ -1535,6 +1578,125 @@ mod tests {
         assert!(result.contains("- Item 2"));
         assert!(result.contains("[Link](https://example.com)"));
         assert!(result.contains("| Col1 | Col2 |"));
+    }
+
+    // --- filter_pr_checks tests ---
+
+    #[test]
+    fn test_filter_pr_checks_non_tty_all_pass() {
+        // gh pr checks outputs tab-separated format in non-TTY (piped) mode
+        let input = "build\tpass\t2m30s\thttps://github.com/foo/bar/runs/1\n\
+                      lint\tpass\t1m15s\thttps://github.com/foo/bar/runs/2\n\
+                      test\tpass\t5m0s\thttps://github.com/foo/bar/runs/3\n";
+        let result = filter_pr_checks(input);
+        assert!(
+            result.contains("Passed: 3"),
+            "Expected 3 passed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Failed: 0"),
+            "Expected 0 failed, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("Pending"),
+            "Should not show pending when 0"
+        );
+    }
+
+    #[test]
+    fn test_filter_pr_checks_non_tty_with_failures() {
+        let input = "build\tpass\t2m30s\thttps://github.com/foo/bar/runs/1\n\
+                      lint\tfail\t1m15s\thttps://github.com/foo/bar/runs/2\n\
+                      test\tfail\t5m0s\thttps://github.com/foo/bar/runs/3\n";
+        let result = filter_pr_checks(input);
+        assert!(
+            result.contains("Passed: 1"),
+            "Expected 1 passed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Failed: 2"),
+            "Expected 2 failed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Failed checks:"),
+            "Should show failed checks section"
+        );
+        assert!(result.contains("lint"), "Should list failed check 'lint'");
+        assert!(result.contains("test"), "Should list failed check 'test'");
+    }
+
+    #[test]
+    fn test_filter_pr_checks_non_tty_with_pending() {
+        let input = "build\tpass\t2m30s\thttps://github.com/foo/bar/runs/1\n\
+                      deploy\tpending\t\thttps://github.com/foo/bar/runs/2\n";
+        let result = filter_pr_checks(input);
+        assert!(
+            result.contains("Passed: 1"),
+            "Expected 1 passed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Pending: 1"),
+            "Expected 1 pending, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_filter_pr_checks_tty_unicode_symbols() {
+        // TTY mode uses Unicode checkmarks
+        let input = "✓\tbuild\t2m30s\thttps://github.com/foo/bar/runs/1\n\
+                      ✓\tlint\t1m15s\thttps://github.com/foo/bar/runs/2\n\
+                      ✗\ttest\t5m0s\thttps://github.com/foo/bar/runs/3\n";
+        let result = filter_pr_checks(input);
+        assert!(
+            result.contains("Passed: 2"),
+            "Expected 2 passed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Failed: 1"),
+            "Expected 1 failed, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_filter_pr_checks_empty_output() {
+        let result = filter_pr_checks("");
+        assert!(result.contains("Passed: 0"));
+        assert!(result.contains("Failed: 0"));
+    }
+
+    #[test]
+    fn test_filter_pr_checks_token_savings() {
+        let input = "build\tpass\t2m30s\thttps://github.com/foo/bar/runs/1\n\
+                      lint\tpass\t1m15s\thttps://github.com/foo/bar/runs/2\n\
+                      test\tpass\t5m0s\thttps://github.com/foo/bar/runs/3\n\
+                      deploy\tpass\t3m0s\thttps://github.com/foo/bar/runs/4\n\
+                      typecheck\tpass\t45s\thttps://github.com/foo/bar/runs/5\n\
+                      e2e\tpass\t10m0s\thttps://github.com/foo/bar/runs/6\n";
+
+        fn count_tokens(text: &str) -> usize {
+            text.split_whitespace().count()
+        }
+
+        let result = filter_pr_checks(input);
+        let input_tokens = count_tokens(input);
+        let output_tokens = count_tokens(&result);
+        let savings = 100.0 - (output_tokens as f64 / input_tokens as f64 * 100.0);
+
+        assert!(
+            savings >= 30.0,
+            "Expected ≥30% savings, got {:.1}% (input: {} tokens, output: {} tokens)",
+            savings,
+            input_tokens,
+            output_tokens
+        );
     }
 
     #[test]
