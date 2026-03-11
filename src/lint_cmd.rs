@@ -47,6 +47,14 @@ struct PylintDiagnostic {
     message_id: String, // e.g., "W0612"
 }
 
+/// Known linters with optimized filtering
+const KNOWN_LINTERS: &[&str] = &["eslint", "ruff", "pylint", "mypy", "flake8", "biome"];
+
+/// Check if a linter is known (has optimized filtering)
+fn is_known_linter(linter: &str) -> bool {
+    KNOWN_LINTERS.contains(&linter)
+}
+
 /// Check if a linter is Python-based (uses pip/pipx, not npm/pnpm)
 fn is_python_linter(linter: &str) -> bool {
     matches!(linter, "ruff" | "pylint" | "mypy" | "flake8")
@@ -89,6 +97,47 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let effective_args = &args[skip..];
 
     let (linter, explicit) = detect_linter(effective_args);
+
+    // Unknown linters: passthrough (execute directly, no flag injection or filtering)
+    if explicit && !is_known_linter(linter) {
+        let user_args = &effective_args[1..]; // skip linter name
+
+        if verbose > 0 {
+            eprintln!("Unknown linter '{}', executing as passthrough", linter);
+        }
+
+        let mut cmd = Command::new(linter);
+        cmd.args(user_args);
+
+        let output = cmd
+            .output()
+            .context(format!("Failed to run '{}'. Is it installed?", linter))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Print stdout and stderr directly (no filtering)
+        if !stdout.is_empty() {
+            print!("{}", stdout);
+        }
+        if !stderr.is_empty() {
+            eprint!("{}", stderr);
+        }
+
+        let raw = format!("{}\n{}", stdout, stderr);
+        timer.track(
+            &format!("{} {}", linter, user_args.join(" ")),
+            &format!("rtk lint {} {}", linter, user_args.join(" ")),
+            &raw,
+            &raw,
+        );
+
+        if !output.status.success() {
+            std::process::exit(output.status.code().unwrap_or(1));
+        }
+
+        return Ok(());
+    }
 
     // Python linters use Command::new() directly (they're on PATH via pip/pipx)
     // JS linters use package_manager_exec (npx/pnpm exec)
@@ -679,6 +728,31 @@ mod tests {
         let effective = &full_args[skip..];
         let (linter, _) = detect_linter(effective);
         assert_eq!(linter, "biome");
+    }
+
+    #[test]
+    fn test_detect_linter_unknown_tool_mix() {
+        // "mix" is not a known linter — detect_linter returns it as explicit,
+        // but run() should passthrough to execute `mix credo` directly
+        let args: Vec<String> = vec!["mix".into(), "credo".into()];
+        let (linter, explicit) = detect_linter(&args);
+        assert_eq!(linter, "mix");
+        assert!(explicit);
+        // The key assertion: "mix" is NOT a known linter
+        assert!(!is_known_linter("mix"));
+    }
+
+    #[test]
+    fn test_known_linters() {
+        assert!(is_known_linter("eslint"));
+        assert!(is_known_linter("ruff"));
+        assert!(is_known_linter("pylint"));
+        assert!(is_known_linter("mypy"));
+        assert!(is_known_linter("flake8"));
+        assert!(is_known_linter("biome"));
+        assert!(!is_known_linter("mix"));
+        assert!(!is_known_linter("credo"));
+        assert!(!is_known_linter("clippy"));
     }
 
     #[test]
