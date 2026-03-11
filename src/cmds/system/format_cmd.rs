@@ -91,7 +91,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
             );
         }
 
-        let mut cmd = std::process::Command::new(&formatter);
+        let mut cmd = resolved_command(&formatter);
         cmd.args(user_args);
 
         let output = cmd
