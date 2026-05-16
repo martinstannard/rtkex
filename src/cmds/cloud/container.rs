@@ -114,26 +114,46 @@ fn docker_ps(_verbose: u8) -> Result<i32> {
         }
     }
 
-    let mut rtk = String::new();
-    rtk.push_str(&format!("[docker] {} running:\n", running.len()));
-    for parts in running.iter().take(20) {
-        if let Some(l) = format_line(parts, true) {
-            rtk.push_str(&l);
-        }
+    const MAX_CONTAINERS: usize = 20;
+
+    // Pre-build compressed lines once; assemble full (for tee) and capped (for display) from them.
+    let running_lines: Vec<String> = running.iter().filter_map(|p| format_line(p, true)).collect();
+    let stopped_lines: Vec<String> = stopped.iter().filter_map(|p| format_line(p, false)).collect();
+
+    let truncated = running_lines.len() > MAX_CONTAINERS || stopped_lines.len() > MAX_CONTAINERS;
+
+    let mut full_rtk = String::new();
+    full_rtk.push_str(&format!("[docker] {} running:\n", running_lines.len()));
+    for l in &running_lines {
+        full_rtk.push_str(l);
     }
-    if running.len() > 20 {
-        rtk.push_str(&format!("  ... +{} more\n", running.len() - 20));
+    if !stopped_lines.is_empty() {
+        full_rtk.push_str(&format!("[docker] {} stopped/exited:\n", stopped_lines.len()));
+        for l in &stopped_lines {
+            full_rtk.push_str(l);
+        }
     }
 
-    if !stopped.is_empty() {
-        rtk.push_str(&format!("[docker] {} stopped/exited:\n", stopped.len()));
-        for parts in stopped.iter().take(20) {
-            if let Some(l) = format_line(parts, false) {
-                rtk.push_str(&l);
-            }
+    let mut rtk = String::new();
+    rtk.push_str(&format!("[docker] {} running:\n", running_lines.len()));
+    for l in running_lines.iter().take(MAX_CONTAINERS) {
+        rtk.push_str(l);
+    }
+    if running_lines.len() > MAX_CONTAINERS {
+        rtk.push_str(&format!("  ... +{} more\n", running_lines.len() - MAX_CONTAINERS));
+    }
+    if !stopped_lines.is_empty() {
+        rtk.push_str(&format!("[docker] {} stopped/exited:\n", stopped_lines.len()));
+        for l in stopped_lines.iter().take(MAX_CONTAINERS) {
+            rtk.push_str(l);
         }
-        if stopped.len() > 20 {
-            rtk.push_str(&format!("  ... +{} more\n", stopped.len() - 20));
+        if stopped_lines.len() > MAX_CONTAINERS {
+            rtk.push_str(&format!("  ... +{} more\n", stopped_lines.len() - MAX_CONTAINERS));
+        }
+    }
+    if truncated {
+        if let Some(hint) = crate::core::tee::force_tee_hint(&full_rtk, "docker-ps") {
+            rtk.push_str(&format!("{}\n", hint));
         }
     }
 
@@ -206,16 +226,30 @@ fn docker_images(_verbose: u8) -> Result<i32> {
     // higher bound than before, and only the count, never the names, is
     // abbreviated) so token savings still hold on machines with many images.
     const MAX_IMAGES: usize = 60;
-    for line in lines.iter().take(MAX_IMAGES) {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if !parts.is_empty() {
-            let image = parts[0];
-            let size = parts.get(1).unwrap_or(&"");
-            rtk.push_str(&format!("  {} [{}]\n", image, size));
-        }
+    let image_lines: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            let image = parts.first().copied().unwrap_or("");
+            let size = parts.get(1).copied().unwrap_or("");
+            format!("  {} [{}]\n", image, size)
+        })
+        .collect();
+
+    // full_rtk = header already in rtk + all image lines (for tee when truncated)
+    let mut full_rtk = rtk.clone();
+    for l in &image_lines {
+        full_rtk.push_str(l);
     }
-    if lines.len() > MAX_IMAGES {
-        rtk.push_str(&format!("  ... +{} more\n", lines.len() - MAX_IMAGES));
+
+    for l in image_lines.iter().take(MAX_IMAGES) {
+        rtk.push_str(l);
+    }
+    if image_lines.len() > MAX_IMAGES {
+        rtk.push_str(&format!("  ... +{} more\n", image_lines.len() - MAX_IMAGES));
+        if let Some(hint) = crate::core::tee::force_tee_tail_hint(&full_rtk, "docker-images", MAX_IMAGES + 2) {
+            rtk.push_str(&format!("{}\n", hint));
+        }
     }
 
     print!("{}", rtk);

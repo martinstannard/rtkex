@@ -4,6 +4,8 @@ use crate::core::runner;
 use crate::core::utils::{resolved_command, tool_exists, truncate};
 use anyhow::Result;
 
+const MAX_XFAIL: usize = 10;
+
 #[derive(Debug, PartialEq)]
 enum ParseState {
     Header,
@@ -205,11 +207,15 @@ fn build_pytest_summary(
     // signals that something expected-to-fail now passes.
     if !xfail_lines.is_empty() {
         result.push_str("\nExpected-failure outcomes:\n");
-        for line in xfail_lines.iter().take(10) {
+        for line in xfail_lines.iter().take(MAX_XFAIL) {
             result.push_str(&format!("  {}\n", truncate(line, 120)));
         }
-        if xfail_lines.len() > 10 {
-            result.push_str(&format!("  ... +{} more\n", xfail_lines.len() - 10));
+        if xfail_lines.len() > MAX_XFAIL {
+            result.push_str(&format!("  ... +{} more\n", xfail_lines.len() - MAX_XFAIL));
+            let all_xfail = xfail_lines.join("\n");
+            if let Some(hint) = crate::core::tee::force_tee_tail_hint(&all_xfail, "pytest-xfail", MAX_XFAIL + 1) {
+                result.push_str(&format!("  {}\n", hint));
+            }
         }
     }
 

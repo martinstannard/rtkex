@@ -181,12 +181,11 @@ pub fn filter_ruff_check_json(output: &str) -> String {
         result.push_str(&format!("\n... +{} more files\n", file_counts.len() - 10));
     }
 
-    // List individual violations with file:line:col so an agent can navigate
-    // straight to each one — the rule/file grouping above is a summary, not a
-    // substitute for locations.
-    const MAX_VIOLATIONS: usize = 50;
+    // List all violations with file:line:col — format compression (JSON → one
+    // liner) already saves ~10x; capping would hide locations the agent needs
+    // to navigate directly to each issue.
     result.push_str("\nViolations:\n");
-    for diag in diagnostics.iter().take(MAX_VIOLATIONS) {
+    for diag in &diagnostics {
         result.push_str(&format!(
             "  {}:{}:{} {} {}\n",
             compact_path(&diag.filename),
@@ -194,12 +193,6 @@ pub fn filter_ruff_check_json(output: &str) -> String {
             diag.location.column,
             diag.code,
             truncate(diag.message.trim(), 100),
-        ));
-    }
-    if diagnostics.len() > MAX_VIOLATIONS {
-        result.push_str(&format!(
-            "  ... +{} more violations\n",
-            diagnostics.len() - MAX_VIOLATIONS
         ));
     }
 

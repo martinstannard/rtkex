@@ -15,7 +15,7 @@ pub fn resolve_filter(name: &str) -> Option<fn(&str) -> String> {
         "find" | "fd" => Some(find_wrapper),
         "git-log" => Some(git_log_wrapper),
         "git-diff" => Some(git_diff_wrapper),
-        "git-status" => Some(crate::cmds::git::git::format_status_output),
+        "git-status" => Some(git_status_wrapper),
         "log" => Some(crate::cmds::system::log_cmd::run_stdin_str),
         "mypy" => Some(crate::cmds::python::mypy_cmd::filter_mypy_output),
         "ruff-check" => Some(crate::cmds::python::ruff_cmd::filter_ruff_check_json),
@@ -27,6 +27,10 @@ pub fn resolve_filter(name: &str) -> Option<fn(&str) -> String> {
 
 fn go_test_wrapper(input: &str) -> String {
     crate::cmds::go::go_cmd::filter_go_test_json(input)
+}
+
+fn git_status_wrapper(input: &str) -> String {
+    crate::cmds::git::git::format_status_output(input)
 }
 
 fn git_log_wrapper(input: &str) -> String {

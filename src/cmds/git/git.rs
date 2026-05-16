@@ -678,6 +678,16 @@ fn truncate_line(line: &str, width: usize) -> String {
 
 /// Preserve RTK's branch/clean framing while keeping porcelain file lines intact.
 pub(crate) fn format_status_output(porcelain: &str) -> String {
+    format_status_inner(porcelain, None)
+}
+
+/// Like `format_status_output` but substitutes the explicit detached-HEAD ref.
+// receives the real ref extracted from plain-status output.
+pub(crate) fn format_status_output_detached(porcelain: &str, detached_ref: &str) -> String {
+    format_status_inner(porcelain, Some(detached_ref))
+}
+
+fn format_status_inner(porcelain: &str, detached: Option<&str>) -> String {
     let lines: Vec<&str> = porcelain
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -692,7 +702,8 @@ pub(crate) fn format_status_output(porcelain: &str) -> String {
     if let Some(branch_line) = lines.first() {
         if branch_line.starts_with("##") {
             let branch = branch_line.trim_start_matches("## ");
-            output.push(format!("* {}", branch));
+            let display = detached.unwrap_or(branch);
+            output.push(format!("* {}", display));
         } else {
             output.push((*branch_line).to_string());
         }
@@ -925,13 +936,10 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<i3
         return Ok(result.exit_code);
     }
 
-    let mut formatted = format_status_output(&result.stdout);
-
-    // Porcelain `-b` reduces a detached HEAD to "## HEAD (no branch)"; restore
-    // the explicit "HEAD detached at <sha>" from the plain status we captured.
-    if let Some(detached) = extract_detached_head(&raw_output) {
-        formatted = formatted.replacen("* HEAD (no branch)", &format!("* {detached}"), 1);
-    }
+    let formatted = match extract_detached_head(&raw_output) {
+        Some(detached_ref) => format_status_output_detached(&result.stdout, &detached_ref),
+        None => format_status_output(&result.stdout),
+    };
 
     // Surface in-progress state (rebase/merge/cherry-pick/bisect/am) from the
     // plain-status output we already captured for tracking. Porcelain omits it
@@ -2778,6 +2786,20 @@ no changes added to commit (use "git add" and/or "git commit -a")
     fn test_extract_detached_head_on_branch_is_none() {
         let raw = "On branch main\nnothing to commit, working tree clean\n";
         assert!(extract_detached_head(raw).is_none());
+    }
+
+    #[test]
+    fn test_format_status_output_detached_head() {
+        let porcelain = "## HEAD (no branch)\n M src/main.rs\n";
+        let result = format_status_output_detached(porcelain, "HEAD detached at abc1234");
+        assert!(
+            result.contains("HEAD detached at abc1234"),
+            "should use explicit detached ref, got: {result}"
+        );
+        assert!(
+            !result.contains("HEAD (no branch)"),
+            "should not show opaque porcelain string, got: {result}"
+        );
     }
 
     #[test]
